@@ -4,9 +4,14 @@ import os
 
 import astropy.units as u
 from astropy.time import Time
-from astropy.table import Table
+from astropy.table import QTable
+
+from numpy.lib.format import open_memmap
+from baseband import vdif
 
 import time
+
+from utils import DispersionMeasure, imshift
 
 workdir = '/mnt/scratch-lustre/nadeau/Chime/'
 codedir = '/mnt/scratch-lustre/nadeau/Chime/Code'
@@ -19,7 +24,7 @@ istream = '/mnt/scratch-lustre/nadeau/Chime/Data/20181019T113802Z_i_stream'
 
 os.chdir(istream)
 
-start_time = Time('2018-10-19T11:38:01.507200000', format='isot', precision=9)
+#start_time = Time('2018-10-19T11:38:01.507200000', format='isot', precision=9)
 
 def stream_run(n, im, time_waste, w=31250, dm=56.61, s_per_sample=2.56e-4):
     
@@ -32,7 +37,7 @@ def stream_run(n, im, time_waste, w=31250, dm=56.61, s_per_sample=2.56e-4):
     elif sample_max > MAX:
         sample_max = MAX
     
-    print(sample_min, sample_max)
+    #print(sample_min, sample_max)
     
     IM = im[:, sample_min:sample_max]
     
@@ -43,7 +48,7 @@ def stream_run(n, im, time_waste, w=31250, dm=56.61, s_per_sample=2.56e-4):
     dt = dm.time_delay(800*u.MHz, np.linspace(800, 400, 1024)*u.MHz)
     
     ddim = imshift(IM*1, shiftc=dt.value/s_per_sample)
-    print('Image dedispersed, t={}s'.format(time.time()-t0))
+    #print('Image dedispersed, t={}s'.format(time.time()-t0), end='                                      \r')
 
     I_test = np.nanmean(ddim, axis=0)
     mean_test = np.nanmean(I_test)
@@ -69,14 +74,15 @@ def stream_run(n, im, time_waste, w=31250, dm=56.61, s_per_sample=2.56e-4):
     
     return ddim, I_test
 
-
 samples_per_frame = 15625
 n_frames = 25*320
 binning = 100
 s_per_sample = 2.56e-6 * binning
 
-I = np.memmap('i_stream.dat', dtype=np.float32, mode='r', shape=(int(samples_per_frame*n_frames/100), 1024))
-
+t0 = time.time()
+I = open_memmap('i_stream.npy', dtype=np.float32, mode='r', shape=(int(samples_per_frame*n_frames/100), 1024))
+tf = time.time()
+print(f'Intensity stream loaded')
 
 ##################################################################################
 # Masking of intensity stream
@@ -100,10 +106,10 @@ for i in range(len(im)): # Loop over frequency channels
             im[i][m] = mean # Fill gaps in channel with the channel mean value
     else:
         im[i] = np.zeros(np.shape(im[i]))
-    print('{}/{}: {}% complete'.format(i+1, len(im), 100*(i+1)/len(im)), end='                                  \r')
+    print('Masking {}/{}: {}% complete'.format(i+1, len(im), 100*(i+1)/len(im)), end='                                  \r')
         
 tf = time.time()
-print('Masking complete: ', tf-t0, end=' s                                                                          \n')        
+print('Masking complete: {:.2f}'.format((tf-t0)/60), end=' min                                                     \n')        
     
 ##################################################################################
 # Dedispersing the intensity stream
@@ -119,6 +125,9 @@ time_waste = int(abs(dt.value / s_per_sample) + 1)
 print(time_waste, ' samples lost at the end of array due to dedispersion')
 
 w = 31250 
+w_eff = w - time_waste
+
+N = int(len(I) / w_eff) + 1
 
 ddim = np.zeros(np.shape(im))
 i = np.zeros(len(I))
@@ -128,8 +137,6 @@ sample = 0
 T0 = time.time()
 
 for n in range(len(I)):
-    
-    print(n)
     
     im_out = stream_run(n, im, time_waste, w, dm=dm, s_per_sample=s_per_sample)
     
@@ -144,21 +151,58 @@ for n in range(len(I)):
     i[sample:sample+d_sample] = y[:d_sample]
     
     sample += d_sample
+    
+    TF = time.time()
+    T = TF - T0
+    hh = int(T/3600)
+    mm = int((T % 3600)/60)
+    ss = int(T % 60)
+    print(f'Samples {n*w_eff:07d}-{w_eff*(n+1):07d} searched -- Searching {100*(n+1)/N:.2f}% complete -- {hh:02d}h{mm:02d}m{ss:02d}s elapsed', end='                                                      \r')
 
-#'''
+
 TF = time.time()
 
 T = TF - T0
 hh = int(T/3600)
 mm = int((T % 3600)/60)
 ss = int(T % 60)
-print('Time for completion: {}h{}m{}s'.format(hh, mm, ss))
+print('Time for completion: {:02d}h{:02d}m{:02d}s'.format(hh, mm, ss))
 
 
 ############################################################################
 # Apply corrections to intensity stream background itteratively
 ############################################################################
 
+N=300
+
+mean_test = np.nanmean(i[:-5000])
+std_test = np.nanstd(i[:-5000])
+snr_test = (i[:-5000]-mean_test)/std_test
+
+rollmean = np.convolve(snr_test, np.ones((N,))/N)[(N-1):]
+
+snr_test_2 = snr_test - rollmean
+mean_test_2 = np.nanmean(snr_test_2)
+std_test_2 = np.nanstd(snr_test_2)
+snr_test_2 = (snr_test_2-mean_test_2)/std_test_2
+
+rollmean_2 = np.convolve(snr_test_2, np.ones((N,))/N)[(N-1):]
+
+snr_test_3 = snr_test_2 - rollmean_2
+mean_test_3 = np.nanmean(snr_test_3)
+std_test_3 = np.nanstd(snr_test_3)
+snr_test_3 = (snr_test_3-mean_test_3)/std_test_3
+
+rollmean_3 = np.convolve(snr_test_3, np.ones((N,))/N)[(N-1):]
+
+snr_test_4 = snr_test_3 - rollmean_3
+mean_test_4 = np.nanmean(snr_test_4)
+std_test_4 = np.nanstd(snr_test_4)
+snr_test_4 = (snr_test_4-mean_test_4)/std_test_4
+
+rollmean_4 = np.convolve(snr_test_4, np.ones((N,))/N)[(N-1):]
+
+'''
 iter = 4
 N = 300
 buffer = 5000
@@ -174,19 +218,32 @@ mean_test = np.nanmean(snr_test)
 std_test = np.nanstd(snr_test)
 
 snr_test = (snr_test - mean_test) / std_test
+'''
+
+print('Corrections applied')
 
 #############################################################################
 # Search intensity stream for Giant Pulses
 #############################################################################
 
-snr_search = snr_test * 1
+snr_search = snr_test_4 * 1
 
-cutoff = 4 # set S/N cutoff
+cutoff = 3.5 # set S/N cutoff
 
 searching = True
 
 POS = []
 SNR = []
+
+os.chdir(banddir)
+x = os.listdir()
+x.sort()
+fh_rs = vdif.open(x, 'rs', sample_rate=1/(2.56*u.us))
+start_time = fh_rs.start_time
+nsamples = fh_rs.shape[0]
+fh_rs.close()
+
+os.chdir(istream)
 
 pos = np.argmax(snr_search)
 snr = snr_search[pos]
@@ -210,17 +267,25 @@ MJD = start_time + TIME_S
 # Create Table of GPs to be saved
 #############################################################################
 
-tab = Table()
+tab = QTable()
 
-tab['mjd'] = MJD
-tab['time'] = TIME
+tab['time'] = TIME_S * u.s + start_time
+
+tab['off_s'] = TIME_S * u.s
 tab['pos'] = POS
 tab['snr'] = SNR
-tab.sort('mjd')
+tab.sort('time')
+
+
+
+tab.meta['binning'] = 100
+tab.meta['start'] = start_time.isot
+tab.meta['nsamples'] = nsamples
+tab.meta['history'] = ['Intensity stream i_stream.npy saved from ChannelSplit on vdif files /mnt/scratch-lustre/hhlin/Data/20181019T113802Z_chime_psr_vdif/*', 
+                       'i_stream.npy dedispersed and searched for giant pulses']
 
 os.chdir(istream)
-overwrite=False
-tab.write('Crab_GP_tab-{}_sigma-binning_{}.fits'.format(cutoff, binning), overwrite=overwrite)
+tab.write('GP_tab-mjd_{:.2f}-sigma_{}-binning_{}.fits'.format(start_time.mjd, cutoff, binning), overwrite=True)
 
 
 

@@ -1,6 +1,10 @@
 import numpy as np
 import time
 
+import astropy.units as u
+
+from scipy.stats import binned_statistic as bs
+
 ######################################################################################################################
 ######################################################################################################################
 
@@ -128,9 +132,9 @@ def imbin(im, binning_c=1, binning_r=1):
     fac_c = factors(shape[1])
     
     bin_r = fac_r[np.abs(fac_r-binning_r).argmin()]
-    print('row binning set to {}, closest factor of row length to {}'.format(bin_r, binning_r))
+    #print('row binning set to {}, closest factor of row length to {}'.format(bin_r, binning_r))
     bin_c = fac_c[np.abs(fac_c-binning_c).argmin()]
-    print('col binning set to {}, closest factor of col length to {}'.format(bin_c, binning_c))
+    #print('col binning set to {}, closest factor of col length to {}'.format(bin_c, binning_c))
     
     rows = np.arange(shape[0])
     if binning_r == 1:

@@ -14,6 +14,10 @@ from scipy.stats import binned_statistic as bs
 import time
 from functools import reduce
 
+from numpy.lib.format import open_memmap
+
+from utils import imbin
+
 workdir = '/mnt/scratch-lustre/nadeau/Chime/'
 codedir = '/mnt/scratch-lustre/nadeau/Chime/Code'
 banddir = '/mnt/scratch-lustre/hhlin/Data/20181019T113802Z_chime_psr_vdif'
@@ -25,17 +29,6 @@ istream = '/mnt/scratch-lustre/nadeau/Chime/Data/20181019T113802Z_i_stream'
 
 os.chdir(banddir)
 
-def reshape(data):
-    '''
-    Function to reshape CHIME Baseband data to (time, ferquency, polarization) 
-    shape of (-1, 1024, 2)
-    '''
-    pols_sep = data.reshape(-1, 256, 4, 2)
-    freq_t = pols_sep.transpose(0, 2, 1, 3)
-    return freq_t.reshape(-1, 1024, 2)
-
-from utils import imbin
-
 # Retrieve list of vdif files
 x = os.listdir()
 x.sort()
@@ -44,6 +37,15 @@ x.sort()
 os.chdir(banddir)
 
 data = vdif.open(x, 'rs', sample_rate=1/(2.56*u.us), verify=False)
+
+# Reshape from CHIME format to a sensible format (time, freq, pol) = (time, 1024, 2)
+
+def reshape(data):
+    pols_sep = data.reshape(-1, 256, 4, 2)
+    freq_t = pols_sep.transpose(0, 2, 1, 3)
+    return freq_t.reshape(-1, 1024, 2)
+
+shaped = ChangeSampleShape(data, reshape)
 
 # Read in data in chunks
 
@@ -76,7 +78,7 @@ for i in range(0, 1024, 8):
 intensities = [] # array to store 4 frames unbinned 
 i_frame = 625
 os.chdir(istream)
-i_stream = np.memmap('i_stream.dat', dtype=np.float32, mode='w+', shape=(int(samples_per_frame*n_frames/100), 1024))
+i_stream = open_memmap('i_stream.npy', dtype=np.float32, mode='w+', shape=(int(samples_per_frame*n_frames/100), 1024))
 i_start = 0
 i_end = i_start + i_frame
 

@@ -6,8 +6,8 @@ import scintillometry
 from baseband import vdif
 
 import astropy.units as u
-#from astropy.time import Time
-#from astropy.table import Table
+from astropy.time import Time
+from astropy.table import QTable
 
 from scintillometry.dispersion import Dedisperse
 from scintillometry.shaping import ChangeSampleShape
@@ -15,6 +15,8 @@ from scintillometry.fourier import get_fft_maker
 from scintillometry.combining import Concatenate
 
 from scipy.stats import binned_statistic as bs
+
+from numpy.lib.format import open_memmap
 
 import time
 from functools import reduce
@@ -24,13 +26,14 @@ codedir = '/mnt/scratch-lustre/nadeau/Chime/Code'
 banddir = '/mnt/scratch-lustre/hhlin/Data/20181019T113802Z_chime_psr_vdif'
 plotdir = '/mnt/scratch-lustre/nadeau/Chime/Code/Plots'
 
-splitdir= '/mnt/scratch-lustre/nadeau/Chime/Data/20181019T113802Z_split_vdif'
 tempdir = '/mnt/scratch-lustre/nadeau/Chime/Data/20181019T113802Z_temp_vdif'
 chandir = '/mnt/scratch-lustre/nadeau/Chime/Data/20181019T113802Z_chan_vdif'
 dispdir = '/mnt/scratch-lustre/nadeau/Chime/Data/20181019T113802Z_disp_vdif'
 datadir = '/mnt/scratch-lustre/nadeau/Chime/Data/'
 
-pulsedir = '/mnt/scratch-lustre/nadeau/Chime/Data/20181019T113802Z_pulse_vdif'
+pulsedir = '/mnt/scratch-lustre/nadeau/Chime/Data/pulse_vdif'
+splitdir= '/mnt/scratch-lustre/nadeau/Chime/Data/20181019T113802Z_split_vdif'
+istream = '/mnt/scratch-lustre/nadeau/Chime/Data/20181019T113802Z_i_stream'
 
 os.chdir(splitdir)
 
@@ -82,37 +85,97 @@ for frame in in_frames:
 
 print('Dedispersion: ', time.time() - t0)
 
+T_START = time.time()
+
 os.chdir(istream)
-tab = Table.read('Crab_GP_tab-4_sigma-binning_100.fits')
+sigma=3.5
+binning=100
+mjd = 58410.48
+tab = QTable.read(f'GP_tab-mjd_{mjd}-sigma_{sigma}-binning_{binning}.fits')#Table.read('GP_tab-mjd_58410.48.fits')#Table.read('Crab_GP_tab-4_sigma-binning_100.fits')
+
+tab.sort('snr')
+tab.reverse()
+
+m = tab['pos'] > 600
+tab = tab[m]
+m = tab['pos'] < tab.meta['NSAMPLES'] / 100 - 5000 # ~ Dedispersion time + 2 pulse periods from edge
+tab = tab[m]
 
 POS = tab['pos']
 
+FNAMES = []
+
+START_TIMES = []
+
+id = 0
+
+t0 = time.time()
+
 for pos in POS:
 
-    t0 = time.time()
-
-    pulsechans = np.zeros((38750, 1024, 2), dtype=np.complex)
+    fname = 'pulse_{:04d}.npy'.format(id)
+    FNAMES += [fname]
+    
+    os.chdir(pulsedir)
+    pulsechans = open_memmap(fname, dtype=np.complex64, mode='w+', shape=(31250, 1024, 2))
+    
     start_time0 = out_frames[0].start_time
 
+    start_times = []
     i = 0
 
+    pulse = np.zeros((31250, 1024, 2), dtype=np.complex64)
     for frame in out_frames:
 
-        pulse_time = (pos - 13000)*2.56*u.us
+        pulse_time = (pos * 100 - 13000)*2.56*u.us
         dt = frame.start_time - start_time0
-
+        
+        for _ in range(8):
+            chantime = frame.start_time + (pos*100 - 13000) * 2.56*u.us
+            start_times += [chantime.isot]
+            
         frame.seek(pulse_time - dt)
-        pulse = frame.read(38750)
-
-        pulsechans[:, i:i+8, :] = pulse#imbin(pulse[:,np.newaxis], binning_c=100)
-
+        
+        pulse[:,i:i+8,:] = frame.read(31250)
+        
+        #print('Channels {}-{} loaded: {}% Complete'.format(i, i+8, 100*(i+8)/1024), end='                 \r')
         i += 8
+        
+    pulsechans[:] = pulse
 
-        print('Channels {}-{} loaded: {}% Complete'.format(i, i+8, 100*(i+8)/1024), end='                 \r')
+    #print('Reading: ', time.time() - t0, end='                    ')
+    tf = time.time()
+    print(f'Pulses written: {id+1}/{len(POS)} - {100*(id+1)/len(POS):.2f}% complete - {tf-t0}s elapsed', end='                \r')
+    
+    START_TIMES += [start_times]
+    id += 1
+    
+    if id > 999:
+        print('Pulse limit reached: 1000 pulses already saved for this dataset.')
+        break
 
-    print('Reading: ', time.time() - t0, end='                    ')
-    
-    # CODE TO WRITE EACH PULSE BB BEFORE MOVING ON TO THE NEXT PULSE
+        
+tab['fname'] = FNAMES
+times = Time(START_TIMES) + (pos*100 - 13000) * 2.56*u.us
+tab['chan_start_times'] = times
 
-    
-    
+tab.meta['freqs'] = frequency
+tab.meta['tbin'] = 2.56 * u.us
+from collections import namedtuple
+tup = namedtuple('Shape', ['time', 'freq', 'pol'])
+x = tup(31250, 1024, 2)
+tab.meta['shape'] = x
+tab.meta['DM'] = 56.61 * u.pc / u.cm**3
+tab.meta['reffreq'] = 800 * u.MHz
+tab.meta['sideband'] = 1
+tab.meta['pol'] = 'XY'
+tab.meta['HISTORY'] += ['Outputs vdif of splitchannel dedispersed and pulses identified with StreamSearch cut out and saved as open_memmap objects.']
+
+os.chdir(istream)
+tab.write('pulse_tab.fits', overwrite=True)
+
+T_END = time.time()
+
+print('{} Pulses written - Time elapsed: {}s'.format(len(POS), T_END-T_START))
+
+
