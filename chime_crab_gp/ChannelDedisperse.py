@@ -9,6 +9,9 @@ import astropy.units as u
 from astropy.time import Time
 from astropy.table import QTable
 
+from scintillometry.fourier import NumpyFFTMaker, get_fft_maker
+get_fft_maker.default = NumpyFFTMaker()
+
 from scintillometry.dispersion import Dedisperse
 from scintillometry.shaping import ChangeSampleShape
 from scintillometry.fourier import get_fft_maker
@@ -21,6 +24,7 @@ from numpy.lib.format import open_memmap
 import time
 from functools import reduce
 
+'''# CITA WORK DIRECTORIES
 workdir = '/mnt/scratch-lustre/nadeau/Chime/'
 codedir = '/mnt/scratch-lustre/nadeau/Chime/Code'
 banddir = '/mnt/scratch-lustre/hhlin/Data/20181019T113802Z_chime_psr_vdif'
@@ -34,12 +38,25 @@ datadir = '/mnt/scratch-lustre/nadeau/Chime/Data/'
 pulsedir = '/mnt/scratch-lustre/nadeau/Chime/Data/pulse_vdif'
 splitdir= '/mnt/scratch-lustre/nadeau/Chime/Data/20181019T113802Z_split_vdif'
 istream = '/mnt/scratch-lustre/nadeau/Chime/Data/20181019T113802Z_i_stream'
+'''
 
-os.chdir(splitdir)
+# CHIME DIRECTORIES WORKSPACE
+import sys
+try:
+    datestr = sys.argv[1]#'20190626'
+    timestr = sys.argv[2]#'191438'
+except:
+    raise Exception(f'sys.argv has length {len(sys.argv)}. datestr and timestr for dataset not set')
 
-x = os.listdir(tempdir)
-x.sort()
+codedir = '/home/serafinnadeau/Scripts/Chime_Crab_GP/chime_crab_gp/'
+banddir = '/drives/CHA/'
 
+testdir = '/pulsar-baseband-archiver/crab_gp_archive/'
+splitdir = testdir + f'{datestr}/splitdir/'
+istream = testdir + f'{datestr}/istream/'
+pulsedir = testdir + f'{datestr}/pulsedir/'
+
+# Open and store pointers to input data files, written at the end of ChannelSplit
 os.chdir(splitdir)  
 in_frames = []
 for i in range(0, 1024, 8):
@@ -61,7 +78,15 @@ freq = np.zeros((1024, 2))
 freq[:, 0] = frequency
 freq[:, 1] = frequency
 
-dm = 56.61 * u.pc / u.cm**3 # Set up the dispersion measure.
+splittab = QTable.read(f'{istream}SplitTab.fits')
+
+sigma = 3.5
+binning = splittab.meta['I_BIN']
+mjd = Time(splittab.meta['T_START'], format='isot', precision=9).mjd
+tab = QTable.read(f'{istream}GP_tab-mjd_{mjd:.2f}-sigma_{sigma}-binning_{binning}.fits')
+
+tbin = splittab.meta['TBIN'] * u.s
+dm = tab.meta['DM'] * u.pc / u.cm**3 # Set up the dispersion measure.
 
 def reshape(data):
     reshaped = data.transpose(0, 2, 1)
@@ -87,18 +112,12 @@ print('Dedispersion: ', time.time() - t0)
 
 T_START = time.time()
 
-os.chdir(istream)
-sigma=3.5
-binning=100
-mjd = 58410.48
-tab = QTable.read(f'GP_tab-mjd_{mjd}-sigma_{sigma}-binning_{binning}.fits')#Table.read('GP_tab-mjd_58410.48.fits')#Table.read('Crab_GP_tab-4_sigma-binning_100.fits')
-
 tab.sort('snr')
 tab.reverse()
 
 m = tab['pos'] > 600
 tab = tab[m]
-m = tab['pos'] < tab.meta['NSAMPLES'] / 100 - 5000 # ~ Dedispersion time + 2 pulse periods from edge
+m = tab['pos'] < tab.meta['NSAMPLES'] / binning - 5000 # ~ Dedispersion time + 2 pulse periods from edge
 tab = tab[m]
 
 POS = tab['pos']
@@ -108,6 +127,8 @@ FNAMES = []
 START_TIMES = []
 
 id = 0
+prepulse = 2625
+pulse_width = 15625
 
 t0 = time.time()
 
@@ -117,27 +138,32 @@ for pos in POS:
     FNAMES += [fname]
     
     os.chdir(pulsedir)
-    pulsechans = open_memmap(fname, dtype=np.complex64, mode='w+', shape=(31250, 1024, 2))
+    pulsechans = open_memmap(fname, dtype=np.float16, mode='w+', shape=(pulse_width, 1024, 4))#open_memmap(fname, dtype=np.complex64, mode='w+', shape=(pulse_width, 1024, 2))
     
     start_time0 = out_frames[0].start_time
 
     start_times = []
     i = 0
 
-    pulse = np.zeros((31250, 1024, 2), dtype=np.complex64)
+    pulse = np.zeros((pulse_width, 1024, 4), dtype=np.float16)#2), dtype=np.complex64)
     for frame in out_frames:
 
-        pulse_time = (pos * 100 - 13000)*2.56*u.us
+        pulse_time = (pos * binning - prepulse) * tbin
         dt = frame.start_time - start_time0
         
         for _ in range(8):
-            chantime = frame.start_time + (pos*100 - 13000) * 2.56*u.us
+            chantime = frame.start_time + (pos * binning - prepulse) * tbin
             start_times += [chantime.isot]
             
         frame.seek(pulse_time - dt)
-        
-        pulse[:,i:i+8,:] = frame.read(31250)
-        
+        readpulse = frame.read(pulse_width)        
+
+        #pulse[:,i:i+8,:] = frame.read(pulse_width)
+        pulse[:,i:i+8,0] = np.real(readpulse[:,:,0])
+        pulse[:,i:i+8,1] = np.imag(readpulse[:,:,0])
+        pulse[:,i:i+8,2] = np.real(readpulse[:,:,1])
+        pulse[:,i:i+8,3] = np.imag(readpulse[:,:,1])        
+
         #print('Channels {}-{} loaded: {}% Complete'.format(i, i+8, 100*(i+8)/1024), end='                 \r')
         i += 8
         
@@ -156,19 +182,20 @@ for pos in POS:
 
         
 tab['fname'] = FNAMES
-times = Time(START_TIMES) + (pos*100 - 13000) * 2.56*u.us
+times = Time(START_TIMES) + (pos*binning - prepulse) * tbin
 tab['chan_start_times'] = times
 
-tab.meta['freqs'] = frequency
-tab.meta['tbin'] = 2.56 * u.us
+tab.meta['freqs'] = frequency.value
+tab.meta['freq_u'] = 'MHz'
+tab.meta['tbin'] = f'{tbin.value} s'
 from collections import namedtuple
 tup = namedtuple('Shape', ['time', 'freq', 'pol'])
-x = tup(31250, 1024, 2)
-tab.meta['shape'] = x
-tab.meta['DM'] = 56.61 * u.pc / u.cm**3
-tab.meta['reffreq'] = 800 * u.MHz
+x = tup(pulse_width, 1024, 4)#2)
+tab.meta['shape'] = (pulse_width, 1024, 4)#x
+tab.meta['axisname'] = '(time, freq, pol)'
+tab.meta['reffreq'] = '800 MHz'
 tab.meta['sideband'] = 1
-tab.meta['pol'] = 'XY'
+tab.meta['pol'] = 'Re(X)Im(X)Re(Y)Im(Y)'#'XY'
 tab.meta['HISTORY'] += ['Outputs vdif of splitchannel dedispersed and pulses identified with StreamSearch cut out and saved as open_memmap objects.']
 
 os.chdir(istream)
@@ -176,6 +203,6 @@ tab.write('pulse_tab.fits', overwrite=True)
 
 T_END = time.time()
 
-print('{} Pulses written - Time elapsed: {}s'.format(len(POS), T_END-T_START))
+print('\n {} Pulses written - Time elapsed: {}s'.format(len(POS), T_END-T_START))
 
 

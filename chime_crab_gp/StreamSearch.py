@@ -13,6 +13,7 @@ import time
 
 from utils import DispersionMeasure, imshift
 
+'''# CITA DIRECTORIES WORKSPACE
 workdir = '/mnt/scratch-lustre/nadeau/Chime/'
 codedir = '/mnt/scratch-lustre/nadeau/Chime/Code'
 banddir = '/mnt/scratch-lustre/hhlin/Data/20181019T113802Z_chime_psr_vdif'
@@ -21,6 +22,22 @@ tempdir = '/mnt/scratch-lustre/nadeau/Chime/Data/20181019T113802Z_temp_vdif'
 
 splitdir= '/mnt/scratch-lustre/nadeau/Chime/Data/20181019T113802Z_split_vdif'
 istream = '/mnt/scratch-lustre/nadeau/Chime/Data/20181019T113802Z_i_stream'
+'''
+
+# CHIME DIRECTORIES WORKSPACE
+import sys
+try:
+    datestr = sys.argv[1]#'20190626'
+    timestr = sys.argv[2]#'191438'
+except:
+    raise Exception(f'sys.argv has length {len(sys.argv)}. datestr and timestr for dataset not set')
+
+codedir = '/home/serafinnadeau/Scripts/Chime_Crab_GP/chime_crab_gp/'
+banddir = '/drives/CHA/'
+
+testdir = '/pulsar-baseband-archiver/crab_gp_archive/'
+splitdir = testdir + f'{datestr}/splitdir/'
+istream = testdir + f'{datestr}/istream/'
 
 os.chdir(istream)
 
@@ -31,7 +48,7 @@ def stream_run(n, im, time_waste, w=31250, dm=56.61, s_per_sample=2.56e-4):
     sample_min = w*n - time_waste*n
     sample_max = sample_min + w
     
-    MAX = len(I)
+    MAX = len(I)#int(samples_per_frame*n_frames/binning)
     if sample_min > MAX:
         return 'end'
     elif sample_max > MAX:
@@ -74,13 +91,16 @@ def stream_run(n, im, time_waste, w=31250, dm=56.61, s_per_sample=2.56e-4):
     
     return ddim, I_test
 
-samples_per_frame = 15625
-n_frames = 25*320
-binning = 100
-s_per_sample = 2.56e-6 * binning
+splittab = QTable.read('SplitTab.fits')
+
+samples_per_frame = splittab.meta['FRAMELEN']
+n_frames = splittab.meta['NFRAMES']
+binning = splittab.meta['I_BIN']
+s_per_sample = splittab.meta['TBIN'] * binning
 
 t0 = time.time()
-I = open_memmap('i_stream.npy', dtype=np.float32, mode='r', shape=(int(samples_per_frame*n_frames/100), 1024))
+I = open_memmap('i_stream.npy', dtype=np.float32, mode='r', 
+                shape=(int(samples_per_frame*n_frames/binning), 1024))
 tf = time.time()
 print(f'Intensity stream loaded')
 
@@ -89,8 +109,7 @@ print(f'Intensity stream loaded')
 # Filling masked portions with mean value of each frequency channel
 ##################################################################################
 
-IM = I.transpose(1,0)
-im = IM * 1
+im = I.transpose(1,0)*1
 
 t0 = time.time()
 
@@ -116,7 +135,7 @@ print('Masking complete: {:.2f}'.format((tf-t0)/60), end=' min                  
 ##################################################################################
 
 # Obtains snr data for w samples, selected based on n
-dm = 56.61
+dm = 56.7
 dm = DispersionMeasure(dm)
 dt = dm.time_delay(800*u.MHz, 400*u.MHz)
     
@@ -144,6 +163,9 @@ for n in range(len(I)):
         break
         
     d_sample = len(im_out[1]) - time_waste
+
+    if d_sample <= 0:
+        break
     
     x, y = im_out
     
@@ -157,8 +179,9 @@ for n in range(len(I)):
     hh = int(T/3600)
     mm = int((T % 3600)/60)
     ss = int(T % 60)
-    print(f'Samples {n*w_eff:07d}-{w_eff*(n+1):07d} searched -- Searching {100*(n+1)/N:.2f}% complete -- {hh:02d}h{mm:02d}m{ss:02d}s elapsed', end='                                                      \r')
+    print(f'Samples {n*w_eff:07d}-{w_eff*(n+1):07d} searched -- Searching {100*(n+1)/N:.2f}% complete -- {hh:02d}h{mm:02d}m{ss:02d}s elapsed', end='  \r')
 
+del im
 
 TF = time.time()
 
@@ -228,22 +251,32 @@ print('Corrections applied')
 
 snr_search = snr_test_4 * 1
 
+istream_corr = open_memmap('istream_corr.npy', dtype=np.float32, mode='w+',
+                           shape=np.shape(snr_search))
+
+istream_corr[:] = snr_search
+
 cutoff = 3.5 # set S/N cutoff
 
 searching = True
 
 POS = []
 SNR = []
-
+'''
 os.chdir(banddir)
-x = os.listdir()
+x = os.listdir('0/20190626T191438Z_chime_psr_vdif/')
 x.sort()
-fh_rs = vdif.open(x, 'rs', sample_rate=1/(2.56*u.us))
+fh_rs = vdif.open('0/20190626T191438Z_chime_psr_vdif/'+x[0], 'rs', sample_rate=1/(2.56*u.us))
 start_time = fh_rs.start_time
 nsamples = fh_rs.shape[0]
 fh_rs.close()
 
+print(start_time)
+
 os.chdir(istream)
+'''
+start_time = Time(splittab.meta['T_START'], format='isot', precision=9)
+nsamples = n_frames * samples_per_frame
 
 pos = np.argmax(snr_search)
 snr = snr_search[pos]
@@ -258,10 +291,12 @@ while snr > cutoff:
     pos = np.argmax(snr_search)
     snr = snr_search[pos]
     
+print(f'Intenisty stream searched for pulses: {len(POS)} pulses found')
+
 POS = np.array(POS)
 TIME_S = POS * s_per_sample
 SNR = np.array(SNR)
-MJD = start_time + TIME_S
+MJD = start_time + TIME_S * u.s
 
 #############################################################################
 # Create Table of GPs to be saved
@@ -269,15 +304,15 @@ MJD = start_time + TIME_S
 
 tab = QTable()
 
-tab['time'] = TIME_S * u.s + start_time
+tab['time'] = (TIME_S * u.s + start_time).isot
 
 tab['off_s'] = TIME_S * u.s
 tab['pos'] = POS
 tab['snr'] = SNR
-tab.sort('time')
+tab.sort('pos')
 
 
-
+tab.meta['DM'] = dm.value 
 tab.meta['binning'] = 100
 tab.meta['start'] = start_time.isot
 tab.meta['nsamples'] = nsamples

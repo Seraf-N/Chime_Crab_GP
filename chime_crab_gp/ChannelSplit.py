@@ -1,3 +1,6 @@
+#import sys
+#sys.path.append('/home/serafinnadeau/Python/packages/scintillometry')
+
 import numpy as np
 
 import os
@@ -5,6 +8,7 @@ import baseband
 from baseband import vdif
 
 import astropy.units as u
+from astropy.table import QTable
 
 from scintillometry.shaping import ChangeSampleShape
 from scintillometry.combining import Concatenate
@@ -18,6 +22,10 @@ from numpy.lib.format import open_memmap
 
 from utils import imbin
 
+
+
+
+'''# CITA DIRECTORIES WORKSPACE
 workdir = '/mnt/scratch-lustre/nadeau/Chime/'
 codedir = '/mnt/scratch-lustre/nadeau/Chime/Code'
 banddir = '/mnt/scratch-lustre/hhlin/Data/20181019T113802Z_chime_psr_vdif'
@@ -33,12 +41,51 @@ os.chdir(banddir)
 x = os.listdir()
 x.sort()
 
+'''
+
+# CHIME DIRECTORIES WORKSPACE
+import sys
+try:
+    datestr = sys.argv[1]#'20190626'
+    timestr = sys.argv[2]#'191438'
+except: 
+    raise Exception(f'sys.argv has length {len(sys.argv)}. datestr and timestr for dataset not set')
+
+codedir = '/home/serafinnadeau/Scripts/Chime_Crab_GP/chime_crab_gp/'
+banddir = '/drives/CHA/'
+
+testdir = '/pulsar-baseband-archiver/crab_gp_archive/' 
+splitdir = testdir + f'{datestr}/splitdir/'
+istream = testdir + f'{datestr}/istream/'
+
+os.chdir(banddir)
+
+# Retrieve list of vdif files
+ftab = QTable()
+fnames = []
+fnumbers = []
+
+for i in range(8):
+    X = os.listdir(f'{i}/{datestr}T{timestr}Z_chime_psr_vdif/')
+    for x in X:
+        fnames += [f'{i}/{datestr}T{timestr}Z_chime_psr_vdif/' + x]
+    
+for f in fnames:
+    fnumbers += [f[34:41]]
+
+ftab['fname'] = fnames
+ftab['fnumber'] = fnumbers
+
+ftab.sort('fnumber')
+x = list(ftab['fname'][:-8])
+#x = x[:2000]
+
 # Open dataset
 os.chdir(banddir)
 
 data = vdif.open(x, 'rs', sample_rate=1/(2.56*u.us), verify=False)
 
-# Reshape from CHIME format to a sensible format (time, freq, pol) = (time, 1024, 2)
+# Reshape from CHIME format to a sensible format (time, freq, pol) = (time, 1024, 2)     
 
 def reshape(data):
     pols_sep = data.reshape(-1, 256, 4, 2)
@@ -49,9 +96,25 @@ shaped = ChangeSampleShape(data, reshape)
 
 # Read in data in chunks
 
+datatime = int(len(x) * 3125 * 2.56e-6) # no of files x samples per file x s per sample -> time in s of total dataset
 samples_per_frame=15625 # This gives 0.04s of data / frame
-n_frames = 25*320 # Total number of frames with samples_per_frame sample of 2.56us each. 25 frames / s, with frame length defined as above
+n_frames = 25*datatime # Total number of frames with samples_per_frame sample of 2.56us each. 25 frames / s, with frame length defined as above
 start_time = data.start_time
+
+# Add metadata to table for following parts of pipeline to use as reference
+ftab.meta['DATATIME'] = datatime
+ftab.meta['FRAMELEN'] = samples_per_frame
+ftab.meta['NFRAMES'] = n_frames
+ftab.meta['T_START'] = start_time.isot
+ftab.meta['T_STOP'] = data.stop_time.isot
+ftab.meta['TBIN'] = (1 / data.sample_rate).to('s').value
+
+binning = 100
+ftab.meta['I_BIN'] = binning
+
+os.chdir(istream)
+ftab.write('SplitTab.fits', overwrite=True)
+os.chdir(banddir)
 
 t0 = time.time()
 
@@ -71,6 +134,8 @@ for i in range(0, 1024, 8):
                           bps=4)
     out_frames += [chanframe] 
 
+print(f'VDIF files opened')
+
 ###########################################################################
 # Set up memmap for saving binned intensity stream
 ###########################################################################
@@ -78,9 +143,13 @@ for i in range(0, 1024, 8):
 intensities = [] # array to store 4 frames unbinned 
 i_frame = 625
 os.chdir(istream)
-i_stream = open_memmap('i_stream.npy', dtype=np.float32, mode='w+', shape=(int(samples_per_frame*n_frames/100), 1024))
+i_stream = open_memmap('i_stream.npy', dtype=np.float32, 
+                       mode='w+', shape=(int(samples_per_frame*n_frames/binning), 
+                       1024))
 i_start = 0
 i_end = i_start + i_frame
+
+print(f'Intensity stream memmap initialized')
 
 ##########################################################################
 # Loop through frames of data and split into channels
@@ -104,7 +173,7 @@ for frame in range(n_frames):
     # Once sufficient number of frames loaded, bin intensity stream by 100 and save to memmap
     if len(intensities) == 4:
         
-        I = np.zeros((62500, 1024))
+        I = np.zeros((i_frame * binning, 1024))
         count = 0
         
         for i in intensities:
@@ -114,7 +183,7 @@ for frame in range(n_frames):
         del intensities
         intensities = []
             
-        I_bin, _, _, _ = imbin(I, binning_r=100)
+        I_bin, _, _, _ = imbin(I, binning_r=binning)
         del I
         
         os.chdir(istream)
@@ -137,12 +206,12 @@ for frame in range(n_frames):
     hh = int(t/3600)
     mm = int((t % 3600)/60)
     ss = int(t % 60)
-    print('Splitting fileno {}/{}: {}% complete; '.format(frame+1, n_frames, (frame+1)*100/n_frames), 'Time elapsed = {}:{}:{}'.format(hh, mm, ss), end='             \r')
+    print(f'Splitting fileno {frame+1}/{n_frames}: {(frame+1)*binning/n_frames:.4f}% complete; Time elapsed = {hh:02d}:{mm:02d}:{ss:02d}', end='       \r')
 
 for chanframe in out_frames:
     chanframe.close()
 
-print('Channel VDIF files closed')
+print('\n Channel VDIF files closed')
 
 os.chdir(istream)
 np.savetxt('complete.txt', [hh, mm, ss])
