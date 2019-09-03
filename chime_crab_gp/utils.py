@@ -24,18 +24,20 @@ def imshift(im, shiftr=0, shiftc=0, realout=True, verbose=False):
     If instead realout = False, then the output will be given in is complex form.
     '''
     # Load row and column lengths of image
-    Nr, Nc = np.shape(im)
+    Nr, Nc = np.shape(im)[:2]
     
     # Create row and column arrays for image
-    r = np.arange(0, Nr, 1)
-    c = np.arange(0, Nc, 1)
+    r = np.linspace(0, Nr-1, Nr)
+    c = np.linspace(0, Nc-1, Nc)
     
     # Convert from real, row / columns to fourier space row / columns 
     R = np.mod((r + Nr/2.),Nr) - Nr/2.
-    #R = np.repeat(R[:, None], Nc, axis=1)
-
     C = np.mod((c + Nc/2.),Nc) - Nc/2.
-    #C = np.repeat(C[None, :], Nr, axis=0)
+    if len(np.shape(im)) == 3:
+        rshape = (len(R), np.shape(im)[2])
+        cshape = (len(C), np.shape(im)[2])
+        R = np.zeros(rshape) + R[:,np.newaxis]
+        C = np.zeros(cshape) + C[:,np.newaxis]
     
     # Make copy image to be shifted
     imshift = im*1

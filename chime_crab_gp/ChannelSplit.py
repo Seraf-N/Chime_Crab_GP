@@ -53,6 +53,7 @@ except:
 
 codedir = '/home/serafinnadeau/Scripts/Chime_Crab_GP/chime_crab_gp/'
 banddir = '/drives/CHA/'
+#banddir = '/drives/CHF/'
 
 testdir = '/pulsar-baseband-archiver/crab_gp_archive/' 
 splitdir = testdir + f'{datestr}/splitdir/'
@@ -96,9 +97,10 @@ shaped = ChangeSampleShape(data, reshape)
 
 # Read in data in chunks
 
-datatime = int(len(x) * 3125 * 2.56e-6) # no of files x samples per file x s per sample -> time in s of total dataset
-samples_per_frame=15625 # This gives 0.04s of data / frame
-n_frames = 25*datatime # Total number of frames with samples_per_frame sample of 2.56us each. 25 frames / s, with frame length defined as above
+datatime = len(x) * 3125 * 2.56e-6 # no of files x samples per file x s per sample -> time in s of total dataset
+samples_per_frame = 15625 # This gives 0.04s of data / frame
+frames_per_second = 25
+n_frames = int(frames_per_second * (datatime))#-1)) # Total number of frames with samples_per_frame sample of 2.56us each. 25 frames / s, with frame length defined as above
 start_time = data.start_time
 
 # Add metadata to table for following parts of pipeline to use as reference
@@ -157,9 +159,11 @@ print(f'Intensity stream memmap initialized')
 # Save intensity stream
 ##########################################################################
 
-os.chdir(banddir)    
-shaped.seek(0)
-for frame in range(n_frames):
+os.chdir(banddir)
+start_frame = 0#n_frames - 30
+#n_frames = int(1  * n_frames)    
+shaped.seek(start_frame * samples_per_frame)
+for frame in range(start_frame, n_frames):
     
     # Read data frame
     os.chdir(banddir)    
@@ -206,11 +210,12 @@ for frame in range(n_frames):
     hh = int(t/3600)
     mm = int((t % 3600)/60)
     ss = int(t % 60)
-    print(f'Splitting fileno {frame+1}/{n_frames}: {(frame+1)*binning/n_frames:.4f}% complete; Time elapsed = {hh:02d}:{mm:02d}:{ss:02d}', end='       \r')
+    print(f' Splitting fileno {frame+1 - start_frame}/{n_frames-start_frame}: {(frame+1-start_frame)*binning/(n_frames-start_frame):.4f}% complete; Time elapsed = {hh:02d}:{mm:02d}:{ss:02d}', end='            \r')
 
 for chanframe in out_frames:
     chanframe.close()
 
+print(' ')
 print('\n Channel VDIF files closed')
 
 os.chdir(istream)

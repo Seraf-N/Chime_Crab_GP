@@ -68,24 +68,24 @@ for i in range(0, 1024, 8):
 frequency = (600
              - 400 / 2.  # Down to bottom end
              + 400/1024 / 2.  # Up to center of channel 0
-             + 400/1024 * np.arange(1024)) * u.MHz # CHIME has 1024 channels
-
+             + 400/1024 * np.arange(1024))[::-1]  #u.MHz # CHIME has 1024 channels
 #For chime, index 0 of frequency axis is 800MHz and index -1 is 400MHz
-frequency = frequency[::-1]
+
+#frequency = np.linspace(800, 400, 1024)
 
 # Form to have the correct shape for the dedisperse function to operate
 freq = np.zeros((1024, 2))
 freq[:, 0] = frequency
 freq[:, 1] = frequency
 
-splittab = QTable.read(f'{istream}SplitTab.fits')
+tab = QTable.read(f'{istream}search_tab.fits')
 
-sigma = 3.5
-binning = splittab.meta['I_BIN']
-mjd = Time(splittab.meta['T_START'], format='isot', precision=9).mjd
-tab = QTable.read(f'{istream}GP_tab-mjd_{mjd:.2f}-sigma_{sigma}-binning_{binning}.fits')
+sigma = tab.meta['SIGMA']
+binning = tab.meta['I_BIN']
+mjd = Time(tab.meta['T_START'], format='isot', precision=9).mjd
+#tab = QTable.read(f'{istream}GP_tab-mjd_{mjd:.2f}-sigma_{sigma}-binning_{binning}.fits')
 
-tbin = splittab.meta['TBIN'] * u.s
+tbin = tab.meta['TBIN'] * u.s
 dm = tab.meta['DM'] * u.pc / u.cm**3 # Set up the dispersion measure.
 
 def reshape(data):
@@ -113,7 +113,11 @@ print('Dedispersion: ', time.time() - t0)
 T_START = time.time()
 
 tab.sort('snr')
-tab.reverse()
+tab = tab[::-1] #tab.reverse()
+#print(tab)
+
+prepulse = 2625
+pulse_width = 15625
 
 m = tab['pos'] > 600
 tab = tab[m]
@@ -127,10 +131,10 @@ FNAMES = []
 START_TIMES = []
 
 id = 0
-prepulse = 2625
-pulse_width = 15625
 
 t0 = time.time()
+
+pulse_limit = 512
 
 for pos in POS:
 
@@ -146,16 +150,19 @@ for pos in POS:
     i = 0
 
     pulse = np.zeros((pulse_width, 1024, 4), dtype=np.float16)#2), dtype=np.complex64)
+    
     for frame in out_frames:
 
         pulse_time = (pos * binning - prepulse) * tbin
-        dt = frame.start_time - start_time0
+        dstart = (frame.start_time - start_time0).to(u.s)
+        dtau = frame.dm.time_delay(frame.frequency, freq[0,0]*u.MHz)
+        corr = dtau[0] - dstart
         
         for _ in range(8):
             chantime = frame.start_time + (pos * binning - prepulse) * tbin
             start_times += [chantime.isot]
             
-        frame.seek(pulse_time - dt)
+        frame.seek(pulse_time - dtau[0] + corr)
         readpulse = frame.read(pulse_width)        
 
         #pulse[:,i:i+8,:] = frame.read(pulse_width)
@@ -171,27 +178,29 @@ for pos in POS:
 
     #print('Reading: ', time.time() - t0, end='                    ')
     tf = time.time()
-    print(f'Pulses written: {id+1}/{len(POS)} - {100*(id+1)/len(POS):.2f}% complete - {tf-t0}s elapsed', end='                \r')
+    print(f' Pulses written: {id+1}/{pulse_limit} - {100*(id+1)/pulse_limit:.2f}% complete - {tf-t0}s elapsed', end='                \r')
     
     START_TIMES += [start_times]
     id += 1
     
-    if id > 999:
-        print('Pulse limit reached: 1000 pulses already saved for this dataset.')
+    if id == pulse_limit:
+        print(' ')
+        print(f'Pulse limit reached: {pulse_limit} pulses already saved for this dataset.')
         break
 
-        
+tab = tab[:pulse_limit]
+
 tab['fname'] = FNAMES
 times = Time(START_TIMES) + (pos*binning - prepulse) * tbin
 tab['chan_start_times'] = times
 
-tab.meta['freqs'] = frequency.value
+tab.meta['freqs'] = frequency
 tab.meta['freq_u'] = 'MHz'
 tab.meta['tbin'] = f'{tbin.value} s'
 from collections import namedtuple
 tup = namedtuple('Shape', ['time', 'freq', 'pol'])
 x = tup(pulse_width, 1024, 4)#2)
-tab.meta['shape'] = (pulse_width, 1024, 4)#x
+tab.meta['shape'] = [pulse_width, 1024, 4]#x
 tab.meta['axisname'] = '(time, freq, pol)'
 tab.meta['reffreq'] = '800 MHz'
 tab.meta['sideband'] = 1
@@ -203,6 +212,6 @@ tab.write('pulse_tab.fits', overwrite=True)
 
 T_END = time.time()
 
-print('\n {} Pulses written - Time elapsed: {}s'.format(len(POS), T_END-T_START))
+print('\n {} Pulses written - Time elapsed: {}s'.format(len(tab), T_END-T_START))
 
 
