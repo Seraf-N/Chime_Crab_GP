@@ -73,25 +73,15 @@ for vdifdir in vdifdirs:
             datestr = vdifdir[:8]
             timestr = vdifdir[9:15]
 
-os.chdir(testdir)
-os.system(f'mkdir {datestr}')
-os.chdir(datestr)
-os.system('mkdir splitdir')
-os.system('mkdir istream')
-os.system('mkdir pulsedir')
+os.system(f'/bin/mkdir {testdir}{datestr}')
+os.system(f'/bin/mkdir {testdir}{datestr}/splitdir')
+os.system(f'/bin/mkdir {testdir}{datestr}/istream')
+os.system(f'/bin/mkdir {testdir}{datestr}/pulsedir')
 
-os.chdir(codedir)
+os.system(f'/home/serafinnadeau/Python/anaconda3/bin/python3 {codedir}ChannelSplit.py {datestr} {timestr}')
 
-os.system(f'nice 19 python3 ChannelSplit.py {datestr} {timestr}')
+os.system(f'/home/serafinnadeau/Python/anaconda3/bin/python3 {codedir}StreamSearch.py {datestr} {timestr}')
 
-os.chdir(codedir)
+os.system(f'/home/serafinnadeau/Python/anaconda3/bin/python3 {codedir}ChannelDedisperse.py {datestr} {timestr}')
 
-os.system(f'nice 19 python3 StreamSearch.py {datestr} {timestr}')
-
-os.chdir(codedir)
-
-os.system(f'nice 19 python3 ChannelDedisperse.py {datestr} {timestr}')
-
-os.chdir(f'{testdir}{datestr}')
-os.system('rm -r splitdir')
-os.chdir(codedir)
+os.system(f'/bin/rm -r {testdir}{datestr}/splitdir')

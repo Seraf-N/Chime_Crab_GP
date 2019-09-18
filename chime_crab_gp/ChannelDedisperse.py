@@ -2,6 +2,11 @@ import numpy as np
 
 import os
 import baseband
+
+import sys
+if '/home/serafinnadeau/Python/packages/scintillometry/' not in sys.path:
+    sys.path.append('/home/serafinnadeau/Python/packages/scintillometry/')
+
 import scintillometry
 from baseband import vdif
 
@@ -71,7 +76,7 @@ frequency = (600
              + 400/1024 * np.arange(1024))[::-1]  #u.MHz # CHIME has 1024 channels
 #For chime, index 0 of frequency axis is 800MHz and index -1 is 400MHz
 
-#frequency = np.linspace(800, 400, 1024)
+frequency = np.linspace(800, 400, 1024, endpoint=False)
 
 # Form to have the correct shape for the dedisperse function to operate
 freq = np.zeros((1024, 2))
@@ -178,7 +183,10 @@ for pos in POS:
 
     #print('Reading: ', time.time() - t0, end='                    ')
     tf = time.time()
-    print(f' Pulses written: {id+1}/{pulse_limit} - {100*(id+1)/pulse_limit:.2f}% complete - {tf-t0}s elapsed', end='                \r')
+    dt = tf - t0
+    m, s = divmod(dt, 60)
+    h, m = divmod(m, 60)
+    print(f' Pulses written: {id+1}/{pulse_limit} - {100*(id+1)/pulse_limit:.2f}% complete - {int(h):02d}:{int(m):02d}:{int(s):02d} elapsed', end='                \r')
     
     START_TIMES += [start_times]
     id += 1
@@ -211,7 +219,10 @@ os.chdir(istream)
 tab.write('pulse_tab.fits', overwrite=True)
 
 T_END = time.time()
+dt = T_END - T_START
+m, s = divmod(dt, 60)
+h, m = divmod(m, 60)
 
-print('\n {} Pulses written - Time elapsed: {}s'.format(len(tab), T_END-T_START))
+print(f'\n {len(tab)} Pulses written - Time elapsed: {int(h):02d}:{int(m):02d}:{int(s):02d}')
 
 

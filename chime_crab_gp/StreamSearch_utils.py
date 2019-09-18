@@ -124,7 +124,7 @@ def dedisperse_chunk(chunk, dm, s_per_sample):
     '''
     Dedisperses the chunk with the given dm
     '''
-    freqs = np.linspace(800, 400, 1024) * u.MHz
+    freqs = np.linspace(800, 400, 1024, endpoint=False) * u.MHz
     dt = dm.time_delay(800*u.MHz, freqs)
 
     chunk = imshift(chunk*1, shiftc=dt.value/s_per_sample)

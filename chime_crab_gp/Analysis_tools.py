@@ -113,7 +113,7 @@ def crab_nu_fit_iter(ptab, start=29.6, end=29.63, N=1000, plot=False):
         I = []
         
         for nu in nus:
-            pwrap = time.value % (1/nu)
+            pwrap = np.array(time) % (1/nu)
             count = []
             for phi in phase:
                 m = pwrap < phi

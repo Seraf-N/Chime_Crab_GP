@@ -10,6 +10,10 @@ from baseband import vdif
 import astropy.units as u
 from astropy.table import QTable
 
+import sys
+if '/home/serafinnadeau/Python/packages/scintillometry/' not in sys.path:
+    sys.path.append('/home/serafinnadeau/Python/packages/scintillometry/')
+
 from scintillometry.shaping import ChangeSampleShape
 from scintillometry.combining import Concatenate
 

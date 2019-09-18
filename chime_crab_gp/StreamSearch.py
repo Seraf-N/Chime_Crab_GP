@@ -45,7 +45,7 @@ istream = testdir + f'{datestr}/istream/'
 
 os.chdir(istream)
 
-splittab = QTable.read('SplitTab.fits')
+splittab = QTable.read(istream+'SplitTab.fits')
 
 samples_per_frame = splittab.meta['FRAMELEN']
 n_frames = splittab.meta['NFRAMES']
