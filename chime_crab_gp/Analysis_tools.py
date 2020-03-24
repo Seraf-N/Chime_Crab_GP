@@ -7,22 +7,27 @@ import os
 import matplotlib.pyplot as plt
 
 from utils import DispersionMeasure, imshift
+
+import sys
+if '/home/serafinnadeau/Python/packages/scintillometry/' not in sys.path:
+    sys.path.append('/home/serafinnadeau/Python/packages/scintillometry/')
+
 from scintillometry.shaping import ChangeSampleShape
 from baseband import vdif
 
 codedir = '/home/serafinnadeau/Scripts/Chime_Crab_GP/chime_crab_gp/'
 plotdir = '/home/serafinnadeau/Plots/'
-archdir = '/pulsar-baseband-archiver/crab_gp_archive/'
+archdir = '/drives/CHF/9/crab_archive/'
 datadir = '/drives/CHA/'
 
-date = 20190813
-if date:
-    archdir = archdir + f'{date}/'
-    istream = archdir + 'istream/'
-    splitdir = archdir + 'splitdir/'
-    pulsedir = archdir + 'pulsedir/'
+#date = 20190813
+#if date:
+#    archdir = archdir + f'{date}/'
+#    istream = archdir + 'istream/'
+#    splitdir = archdir + 'splitdir/'
+#    pulsedir = archdir + 'pulsedir/'
 
-def crab_nu_fit(ptab, start=29.6, end=29.63, N=1000, plot=False):
+def crab_nu_fit(tab, start=29.6, end=29.63, N=1000, plot=False):
     '''
     From list of GP detections, calculates the pulse period by wrapping
     the detection times by the 1/(pulse frequency) for a range of spin 
@@ -32,7 +37,7 @@ def crab_nu_fit(ptab, start=29.6, end=29.63, N=1000, plot=False):
 
     
     '''
-    ptab = QTable(np.copy(ptab))
+    ptab = tab.copy()#QTable(np.copy(ptab))
     ptab.sort('off_s')
     time = ptab['off_s']
     snr = ptab['snr']
@@ -44,7 +49,7 @@ def crab_nu_fit(ptab, start=29.6, end=29.63, N=1000, plot=False):
     i = 1
     for nu in nus:
         # Wrap the detection time uising the guess frequency to get a phase
-        pwrap = (time / (1 / nu)) % 1
+        pwrap = (time.value / (1 / nu)) % 1
         # Get the cumulative number of detections as a function of phase
         count = []
         for phi in phase:
@@ -174,11 +179,11 @@ def crab_nu_fit_iter(ptab, start=29.6, end=29.63, N=1000, plot=False):
 
     return nu, dnu
 
-def read_pulse(date, number):
+def read_pulse(date, number, directory='/drives/CHF/9/crab_archive/'):
     '''
     Reads a specific archived pulse.
     '''
-    pulsedir = f'/pulsar-baseband-archiver/crab_gp_archive/{date}/pulsedir/'
+    pulsedir = f'{directory}{date}/pulsedir/'#f'/drives/CHF/9/crab_archive/{date}/pulsedir/'
 
     pulse = open_memmap(pulsedir + f'pulse_{number:04d}.npy', dtype=np.float16, 
                         mode='r', shape=(15625, 1024, 4))
@@ -215,7 +220,7 @@ def read_stream(date):
     '''
     Reads the un-dedispersed, binned intensity stream for the input date
     '''
-    streamdir = f'/pulsar-baseband-archiver/crab_gp_archive/{date}/istream/'
+    streamdir = f'{archdir}{date}/istream/'
 
     I = open_memmap(streamdir + 'i_stream.npy', mode='r+')
 
@@ -230,8 +235,8 @@ def readpulse(date, number, dm=56.7, prepulse=2625, profilewidth=15625, subpix=T
     dm = DispersionMeasure(dm)
     DP = []
 
-    istream = f'/pulsar-baseband-archiver/crab_gp_archive/{date}/istream/'
-    slpitdir = f'/pulsar-baseband-archiver/crab_gp_archive/{date}/splitdir/'
+    istream = f'{archdir}{date}/istream/'
+    slpitdir = f'{archdir}{date}/splitdir/'
 
     tab = QTable.read(istream + 'pulse_tab.fits')
     m = tab['fname'] == f'pulse_{number:04d}.npy'
@@ -310,4 +315,62 @@ def get_vdif_files(date, time, datadir=datadir):
     fnames.sort()
     return fnames
 
+
+def dedisperse_chunk(chunk, dm, s_per_sample=2.56e-6):
+    '''
+    Dedisperses the chunk with the given dm
+    '''
+    freqs = np.linspace(800, 400, 1024, endpoint=False) * u.MHz
+    dt = dm.time_delay(800*u.MHz, freqs)
+
+    chunk_dd = imshift(chunk*1, shiftr=dt.value/s_per_sample)
+
+    return chunk_dd
     
+
+def dm_fit(I, DM0, s_per_sample=2.56e-6, Niter=3, L=50):
+    
+    DM0 = DispersionMeasure(DM0)
+        
+    dms = DispersionMeasure(np.linspace(56.6, 56.9, L))
+    ddm = (dms[0] - dms[-1])/99
+    DMs = []
+    S = []
+    
+    binning = s_per_sample / 2.56e-6
+    
+    bound = 0.02/s_per_sample
+    
+    Iter = 1
+    
+    while Iter <= Niter:
+        
+        count = 0
+    
+        for dm in dms:
+            I_shift = dedisperse_chunk(I, dm-DM0, s_per_sample)
+            i = np.sum(I_shift, axis=1)
+            m = np.median(i)
+            M = np.max(i - m)
+
+            max_bound = int(np.argmax(i - m)+bound)
+
+            N = np.nanstd(i[max_bound:] - m)
+
+            DMs += [dm]
+            S += [M / N]
+
+            print(f'Scan {Iter}: {(count+1)*100/len(dms):.2f}% Complete', end='            \r')
+
+            count += 1
+
+
+        count = 0
+        pos = np.argmax(S)
+        dm_peak = DMs[pos].value
+        
+        Iter += 1   
+        dms = DispersionMeasure(np.linspace(dm_peak-0.1**Iter * Iter, dm_peak+0.1**Iter * Iter, L))
+       
+    
+    return DMs, S

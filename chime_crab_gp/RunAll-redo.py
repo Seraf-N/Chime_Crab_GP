@@ -14,81 +14,21 @@ if '/home/serafinnadeau/Python/packages/scintillometry/' not in sys.path:
     sys.path.append('/home/serafinnadeau/Python/packages/scintillometry/')
 
 homedir = '/home/serafinnadeau/'
-datadir = '/drives/STOPGAP/'
+datadir = '/drives/CHF/'
+#datadir = '/drives/CHF/'
 codedir = homedir + 'Scripts/Chime_Crab_GP/chime_crab_gp/'
 
-drivedir = '/drives/STOPGAP/9/'
-testdir = drivedir + 'crab_archive/'
+testdir = '/drives/CHF/8/crab_archive/'
 plots = testdir + 'Plots/'
+#testdir = '/pulsar-baseband-archiver/crab_gp_archive/'
 
 
-#get_time = False
-try:
-    get_time = int(sys.argv[1])
-    datestr = sys.argv[2]
-except:
-    get_time = True
+datestr = '20200312'
+timestr = '021310'
+#20200311T021712
 
-if get_time == False:
-    datestr = '20200211'
-    time = Time(datestr[:4]+'-'+datestr[4:6]+'-'+datestr[6:]+'T00:00:00')
-else:
-    time = Time(datetime.now()) - 600*u.s
+print(datestr, timestr)
 
-print(time)
-    
-schedulefile = f'/home/cng/CHIME-PSR-ScheduleFiles/Schedule_JD{int(time.jd-0.5)}.5.dat.bb'
-txt = open(schedulefile, 'r')
-
-lines = txt.readlines()
-for line in lines:
-    if 'B0531+21' == line[:8]:
-        row = line
-        print(line)
-
-txt.close()
-
-row = row.split()
-daytab = Table(np.array(row), 
-               names=['psr', 'unix_start', 'unix_end', 'ra', 'dec', 'beam_no', 
-                          'scaling_factor', 'dm', 'mode', 'phase_bin', 'raj2000', 'decj2000'], 
-               dtype=[str, np.float64, np.float64, np.float64, np.float64, 
-                      np.int16, np.float16, np.float32, str, np.int16, np.float32, np.float32])
-
-bbstart = datetime.fromtimestamp(daytab['unix_start'])
-bbend = datetime.fromtimestamp(daytab['unix_end'])
-print(bbstart, bbend)
-
-print(get_time)
-
-if get_time:
-    dt = datetime.now() - bbend
-    while dt.total_seconds()/60 < 10:
-        sleep(10 - dt.total_seconds()/60)    
-        dt = datetime.now() - bbend
-
-vdifdirs = os.listdir(f'{datadir}0')
-best = 3600 * 24 + 1
-
-for vdifdir in vdifdirs:
-    
-    if vdifdir[:8] == f'{bbstart.year:04d}{bbstart.month:02d}{bbstart.day:02d}':
-        
-        vdif_time = vdifdir[9:15]
-        hh = int(vdif_time[:2])
-        mm = int(vdif_time[2:4])
-        ss = int(vdif_time[4:])
-        vdif_time_s = hh * 3600 + mm * 60 + ss
-        hh = bbstart.hour
-        mm = bbstart.minute
-        ss = bbstart.second
-        unix_time_s = hh * 3600 + mm * 60 + ss
-        if abs(vdif_time_s - unix_time_s) < best: 
-            best = abs(vdif_time_s - unix_time_s)
-            print(vdifdir, best)
-            datestr = vdifdir[:8]
-            timestr = vdifdir[9:15]
-            print(datestr, timestr)
 
 os.system(f'/bin/mkdir {testdir}')
 os.system(f'/bin/mkdir {testdir}Plots')
@@ -97,15 +37,12 @@ os.system(f'/bin/mkdir {testdir}{datestr}/splitdir')
 os.system(f'/bin/mkdir {testdir}{datestr}/istream')
 os.system(f'/bin/mkdir {testdir}{datestr}/pulsedir')
 
-print(datestr, timestr)
+os.system(f'/home/serafinnadeau/Python/anaconda3/bin/python3 {codedir}ChannelSplit.py {datestr} {timestr}')
 
-if os.path.ismount(drivedir):
-    os.system(f'/home/serafinnadeau/Python/anaconda3/bin/python3 {codedir}ChannelSplit.py {datestr} {timestr}')
-if os.path.ismount(drivedir):
-    os.system(f'/home/serafinnadeau/Python/anaconda3/bin/python3 {codedir}StreamSearch.py {datestr} {timestr}')
-    os.system(f'/home/serafinnadeau/Python/anaconda3/bin/python3 {codedir}StreamSearch.py {datestr} {timestr}')
-if os.path.ismount(drivedir):
-    os.system(f'/home/serafinnadeau/Python/anaconda3/bin/python3 {codedir}ChannelDedisperse.py {datestr} {timestr}')
+os.system(f'/home/serafinnadeau/Python/anaconda3/bin/python3 {codedir}StreamSearch.py {datestr} {timestr}')
+os.system(f'/home/serafinnadeau/Python/anaconda3/bin/python3 {codedir}StreamSearch.py {datestr} {timestr}')
+
+os.system(f'/home/serafinnadeau/Python/anaconda3/bin/python3 {codedir}ChannelDedisperse.py {datestr} {timestr}')
 
 os.chdir(codedir)
 from Analysis_tools import *

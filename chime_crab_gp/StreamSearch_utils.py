@@ -3,6 +3,10 @@ import astropy.units as u
 from astropy.time import Time
 from astropy.table import QTable
 
+import sys
+if '/home/serafinnadeau/Python/packages/scintillometry/' not in sys.path:
+    sys.path.append('/home/serafinnadeau/Python/packages/scintillometry/')
+
 from numpy.lib.format import open_memmap
 import os
 
@@ -31,6 +35,7 @@ def master(stream2D, w=31250, dm=56.7, s_per_sample=2.56e-4, verbose=True):
     N = int(len(stream2D) / w_eff) # the number chunks to be read in
 
     stream1D = np.zeros(N * w_eff)
+    mask1D = np.zeros(N * w_eff)
 
     if verbose:
         t0 = time.time()
@@ -79,6 +84,15 @@ def verbose_print(current, max, t0, extra='', rewrite=True):
           end=end)
     return
 
+def rollingmean(x, w, edge=False):
+    roll = np.convolve(x, np.ones((w,))/w, mode='same')
+    
+    if edge:
+        roll[:edge] = roll[edge+1]
+        roll[-edge:] = roll[-edge-1]
+    
+    return roll
+
 def select_chunk(chunk_n, w_eff):
     '''
     Calculates the starting sample of the memmaped 2D stream for a given chunk
@@ -108,10 +122,10 @@ def mask_chunk(chunk):
     '''
     for i in range(len(chunk)): # Loop over frequencies
         row2 = chunk[i] * 1
-        m = chunk[i] == 0
+        m = (chunk[i] == 0) + np.isnan(chunk[i])
         if np.sum(m) != 0:
             row2[m] = np.nan            # Mask all true zeros to nan
-            mean= np.nanmean(row2)      # Compute the mean of each channel
+            mean = np.nanmean(row2)      # Compute the mean of each channel
             if np.isnan(mean):
                 chunk[i][m] = 0 # if channel mean is nan, the fill channel back with 0
             else:
@@ -124,6 +138,7 @@ def dedisperse_chunk(chunk, dm, s_per_sample):
     '''
     Dedisperses the chunk with the given dm
     '''
+    
     freqs = np.linspace(800, 400, 1024, endpoint=False) * u.MHz
     dt = dm.time_delay(800*u.MHz, freqs)
 
@@ -140,45 +155,45 @@ def fuse_chunk(stream1D, chunk, sample_min, w_eff):
 
     return stream1D
 
-def correct_stream(stream1D, N=300):
+def correct_stream(stream1D, savedir, N=1000):
     '''
     flattens the background levels of the intensity stream to better pick out 
     giant pulses in the search by itteratively subtracting the rolling mean.
     Saves the corrected 1D stream as a memmap object.
     '''
-    mean_test = np.nanmean(stream1D[:-5000])
-    std_test = np.nanstd(stream1D[:-5000])
-    snr_test = (stream1D[:-5000]-mean_test)/std_test
+    mean_test = np.nanmean(stream1D)
+    std_test = np.nanstd(stream1D)
+    snr_test = (stream1D-mean_test)/std_test
 
-    rollmean = np.convolve(snr_test, np.ones((N,))/N)[(N-1):]
+    rollmean = rollingmean(snr_test, N, edge=N)
+    
+    snr_test = snr_test - rollmean
+    mean_test = np.nanmean(snr_test)
+    std_test = np.nanstd(snr_test)
+    snr_test = (snr_test-mean_test)/std_test
 
-    snr_test_2 = snr_test - rollmean
-    mean_test_2 = np.nanmean(snr_test_2)
-    std_test_2 = np.nanstd(snr_test_2)
-    snr_test_2 = (snr_test_2-mean_test_2)/std_test_2
+    rollmean = rollingmean(snr_test, N, edge=N)
 
-    rollmean_2 = np.convolve(snr_test_2, np.ones((N,))/N)[(N-1):]
+    snr_test = snr_test - rollmean
+    mean_test = np.nanmean(snr_test)
+    std_test = np.nanstd(snr_test)
+    snr_test = (snr_test-mean_test)/std_test
 
-    snr_test_3 = snr_test_2 - rollmean_2
-    mean_test_3 = np.nanmean(snr_test_3)
-    std_test_3 = np.nanstd(snr_test_3)
-    snr_test_3 = (snr_test_3-mean_test_3)/std_test_3
+    rollmean = rollingmean(snr_test, N, edge=N)
 
-    rollmean_3 = np.convolve(snr_test_3, np.ones((N,))/N)[(N-1):]
+    snr_test = snr_test - rollmean
+    mean_test = np.nanmean(snr_test)
+    std_test = np.nanstd(snr_test)
+    snr_test = (snr_test-mean_test)/std_test
 
-    snr_test_4 = snr_test_3 - rollmean_3
-    mean_test_4 = np.nanmean(snr_test_4)
-    std_test_4 = np.nanstd(snr_test_4)
-    snr_test_4 = (snr_test_4-mean_test_4)/std_test_4
-
-    stream1D = open_memmap('istream_corr.npy', dtype=np.float32, mode='w+', 
-                           shape=np.shape(snr_test_4))
-    stream1D[:] = snr_test_4
+    stream1D = open_memmap(savedir+'istream_corr.npy', dtype=np.float32, mode='w+', 
+                           shape=np.shape(snr_test))
+    stream1D[:] = snr_test
     
     return stream1D
 
-def streamsearch(stream1D, splittab, cutoff, banddir, datestr, timestr, 
-                 Nmax=1024, dm=DispersionMeasure(56.7), output=False):
+def streamsearch(stream1D, splittab, cutoff, banddir, savedir, datestr, timestr, 
+                 Nmax=False, Nmin=1024, dm=DispersionMeasure(56.7), output=False):
     '''
     Searches the corrected 1D stream for signals stonger than 'cutoff' sigma
     '''
@@ -194,35 +209,36 @@ def streamsearch(stream1D, splittab, cutoff, banddir, datestr, timestr,
     
     nsamples = n_frames * samples_per_frame
 
-    pos = np.argmax(snr_search)
-    snr = snr_search[pos]
+    pos = np.nanargmax(snr_search)
+    signal = snr_search[pos]
+    snr_search[pos-30:pos+30]= np.nan
+    snr = (signal - np.nanmean(snr_search[pos-150:pos+150])) / np.nanstd(snr_search[pos-150:pos+150])
 
     i = 0
     t0 = time.time()
 
     snr_search[:int(1.11/2.56e-6/100)] = 0
 
-    while snr > cutoff:
-        if len(POS) < Nmax:
-            # Ensure that the pulse is not too close to start of data for dedispersion
-            if pos * 100 * 2.56e-6 > 1.11:
-                POS += [pos]
-                SNR += [snr]
+    while (snr > cutoff) or (len(POS) < Nmin):
+        if (len(POS) < Nmax) or (not Nmax):
+            
+            POS += [pos]
+            SNR += [snr]
 
-            snr_search[pos-100:pos+100] = 0
+            snr_search[pos-30:pos+30] = 0
 
-            pos = np.argmax(snr_search)
-            snr = snr_search[pos]
+            pos = np.nanargmax(snr_search)
+            signal = snr_search[pos]
+            snr_search[pos-30:pos+30] = np.nan
+            snr = (signal - np.nanmean(snr_search[pos-150:pos+150])) / np.nanstd(snr_search[pos-150:pos+150])
 
             i += 1
             t = time.time() - t0
             m, s = divmod(t, 60)
             h, m = divmod(m, 60)
-            print(f'Intensity stream searched for pulses: {len(POS)} pulses found -- '
-                  f'S/N: {snr:.3f} -- POS: {pos*100*2.56e-6:.3f} -- Time elapsed: '
-                  f'{int(h):02d}:{int(m):02d}:{int(s):02d}', end='                     \r')
-            if len(POS) == 1000:
-                break
+            #print(f'Intensity stream searched for pulses: {len(POS)} pulses found -- '
+            #      f'S/N: {snr:.3f} -- POS: {pos*100*2.56e-6:.3f} -- Time elapsed: '
+            #      f'{int(h):02d}:{int(m):02d}:{int(s):02d}', end='                     \r')
 
     print(f'Intenisty stream searched for pulses: {len(POS)} pulses found                             ')
 
@@ -254,7 +270,7 @@ def streamsearch(stream1D, splittab, cutoff, banddir, datestr, timestr,
                            'Z_chime_psr_vdif/*',
                            'i_stream.npy dedispersed and searched for giant pulses']
 
-    tab.write(f'search_tab.fits', overwrite=True)
+    tab.write(savedir+f'search_tab.fits', overwrite=True)
 
     if output:
         return tab

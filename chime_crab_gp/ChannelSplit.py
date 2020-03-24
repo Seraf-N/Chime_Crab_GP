@@ -4,8 +4,6 @@
 import numpy as np
 
 import os
-import baseband
-from baseband import vdif
 
 import astropy.units as u
 from astropy.table import QTable
@@ -25,6 +23,13 @@ from functools import reduce
 from numpy.lib.format import open_memmap
 
 from utils import imbin
+
+os.chdir('/home/serafinnadeau/Python/packages/baseband/')
+
+import baseband
+from baseband import vdif
+
+print(baseband.__version__)
 
 
 
@@ -56,10 +61,9 @@ except:
     raise Exception(f'sys.argv has length {len(sys.argv)}. datestr and timestr for dataset not set')
 
 codedir = '/home/serafinnadeau/Scripts/Chime_Crab_GP/chime_crab_gp/'
-banddir = '/drives/CHA/'
-#banddir = '/drives/CHF/'
+banddir = '/drives/STOPGAP/'
 
-testdir = '/pulsar-baseband-archiver/crab_gp_archive/' 
+testdir = '/drives/STOPGAP/9/crab_archive/'
 splitdir = testdir + f'{datestr}/splitdir/'
 istream = testdir + f'{datestr}/istream/'
 
@@ -147,11 +151,13 @@ print(f'VDIF files opened')
 ###########################################################################
 
 intensities = [] # array to store 4 frames unbinned 
+#mask = []
 i_frame = 625
 os.chdir(istream)
 i_stream = open_memmap('i_stream.npy', dtype=np.float32, 
                        mode='w+', shape=(int(samples_per_frame*n_frames/binning), 
                        1024))
+
 i_start = 0
 i_end = i_start + i_frame
 
@@ -171,6 +177,7 @@ for frame in range(start_frame, n_frames):
     
     # Read data frame
     os.chdir(banddir)    
+    
     dataframe = shaped.read(samples_per_frame)
     
     frame_start = start_time + 2.56*u.us*frame
@@ -185,6 +192,7 @@ for frame in range(start_frame, n_frames):
         count = 0
         
         for i in intensities:
+            i[i==0] = np.nan
             I[samples_per_frame*count:samples_per_frame*count+samples_per_frame] = i
             count += 1
             
@@ -221,6 +229,3 @@ for chanframe in out_frames:
 
 print(' ')
 print('\n Channel VDIF files closed')
-
-os.chdir(istream)
-np.savetxt('complete.txt', [hh, mm, ss])

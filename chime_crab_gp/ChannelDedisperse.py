@@ -1,14 +1,12 @@
 import numpy as np
 
 import os
-import baseband
 
 import sys
 if '/home/serafinnadeau/Python/packages/scintillometry/' not in sys.path:
     sys.path.append('/home/serafinnadeau/Python/packages/scintillometry/')
 
 import scintillometry
-from baseband import vdif
 
 import astropy.units as u
 from astropy.time import Time
@@ -28,6 +26,10 @@ from numpy.lib.format import open_memmap
 
 import time
 from functools import reduce
+
+os.chdir('/home/serafinnadeau/Python/packages/baseband/')
+import baseband
+from baseband import vdif
 
 '''# CITA WORK DIRECTORIES
 workdir = '/mnt/scratch-lustre/nadeau/Chime/'
@@ -54,9 +56,10 @@ except:
     raise Exception(f'sys.argv has length {len(sys.argv)}. datestr and timestr for dataset not set')
 
 codedir = '/home/serafinnadeau/Scripts/Chime_Crab_GP/chime_crab_gp/'
-banddir = '/drives/CHA/'
+banddir = '/drives/STOPGAP/'
 
-testdir = '/pulsar-baseband-archiver/crab_gp_archive/'
+#testdir = '/pulsar-baseband-archiver/crab_gp_archive/'
+testdir = '/drives/STOPGAP/9/crab_archive/'
 splitdir = testdir + f'{datestr}/splitdir/'
 istream = testdir + f'{datestr}/istream/'
 pulsedir = testdir + f'{datestr}/pulsedir/'
@@ -91,7 +94,7 @@ mjd = Time(tab.meta['T_START'], format='isot', precision=9).mjd
 #tab = QTable.read(f'{istream}GP_tab-mjd_{mjd:.2f}-sigma_{sigma}-binning_{binning}.fits')
 
 tbin = tab.meta['TBIN'] * u.s
-dm = tab.meta['DM'] * u.pc / u.cm**3 # Set up the dispersion measure.
+dm = tab.meta['DM_GUESS'] * u.pc / u.cm**3 # Set up the dispersion measure.
 
 def reshape(data):
     reshaped = data.transpose(0, 2, 1)
@@ -128,6 +131,9 @@ m = tab['pos'] > 600
 tab = tab[m]
 m = tab['pos'] < tab.meta['NSAMPLES'] / binning - 5000 # ~ Dedispersion time + 2 pulse periods from edge
 tab = tab[m]
+
+#m = tab['component'] != 0
+#tab = tab[m]
 
 POS = tab['pos']
 
@@ -166,17 +172,19 @@ for pos in POS:
         for _ in range(8):
             chantime = frame.start_time + (pos * binning - prepulse) * tbin
             start_times += [chantime.isot]
-            
-        frame.seek(pulse_time - dtau[0] + corr)
-        readpulse = frame.read(pulse_width)        
+        try:    
+            frame.seek(pulse_time - dtau[0] + corr)
+            readpulse = frame.read(pulse_width)        
 
-        #pulse[:,i:i+8,:] = frame.read(pulse_width)
-        pulse[:,i:i+8,0] = np.real(readpulse[:,:,0])
-        pulse[:,i:i+8,1] = np.imag(readpulse[:,:,0])
-        pulse[:,i:i+8,2] = np.real(readpulse[:,:,1])
-        pulse[:,i:i+8,3] = np.imag(readpulse[:,:,1])        
+            #pulse[:,i:i+8,:] = frame.read(pulse_width)
+            pulse[:,i:i+8,0] = np.real(readpulse[:,:,0])
+            pulse[:,i:i+8,1] = np.imag(readpulse[:,:,0])
+            pulse[:,i:i+8,2] = np.real(readpulse[:,:,1])
+            pulse[:,i:i+8,3] = np.imag(readpulse[:,:,1])        
 
-        #print('Channels {}-{} loaded: {}% Complete'.format(i, i+8, 100*(i+8)/1024), end='                 \r')
+            #print('Channels {}-{} loaded: {}% Complete'.format(i, i+8, 100*(i+8)/1024), end='                 \r')
+        except:
+            pass
         i += 8
         
     pulsechans[:] = pulse
